@@ -15,33 +15,72 @@
  */
 package org.springframework.data.couchbase.repository.query;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.data.couchbase.core.CouchbaseOperations;
+import org.springframework.data.couchbase.core.ExecutableFindByQueryOperation;
 import org.springframework.data.couchbase.core.query.Query;
+import org.springframework.data.repository.core.NamedQueries;
 import org.springframework.data.repository.query.ParameterAccessor;
 import org.springframework.data.repository.query.ParametersParameterAccessor;
-import org.springframework.data.repository.query.QueryMethod;
+import org.springframework.data.repository.query.QueryMethodEvaluationContextProvider;
 import org.springframework.data.repository.query.parser.PartTree;
 
+/**
+ * @author Michael Nitschinger
+ * @author Michael Reiche
+ */
 public class N1qlRepositoryQueryExecutor {
 
 	private final CouchbaseOperations operations;
-	private final QueryMethod queryMethod;
+	private final CouchbaseQueryMethod queryMethod;
+	private final NamedQueries namedQueries;
 
-	public N1qlRepositoryQueryExecutor(final CouchbaseOperations operations, final QueryMethod queryMethod) {
+	public N1qlRepositoryQueryExecutor(final CouchbaseOperations operations, final CouchbaseQueryMethod queryMethod,
+			final NamedQueries namedQueries) {
 		this.operations = operations;
 		this.queryMethod = queryMethod;
+		this.namedQueries = namedQueries;
 	}
 
+	/**
+	 * see also {@link ReactiveN1qlRepositoryQueryExecutor#execute(Object[] parameters) execute }
+	 * @param parameters
+	 * @return
+	 */
 	public Object execute(final Object[] parameters) {
 		final Class<?> domainClass = queryMethod.getResultProcessor().getReturnedType().getDomainType();
 		final ParameterAccessor accessor = new ParametersParameterAccessor(queryMethod.getParameters(), parameters);
+		final String namedQueryName = queryMethod.getNamedQueryName();
 
-		final PartTree tree = new PartTree(queryMethod.getName(), domainClass);
-		Query query = new N1qlQueryCreator(tree, accessor, operations.getConverter().getMappingContext()).createQuery();
+		Query query;
+		ExecutableFindByQueryOperation.ExecutableFindByQuery q;
+		if (queryMethod.hasN1qlAnnotation()) {
+			String queryString;
+			if (queryMethod.hasInlineN1qlQuery()) {
+				queryString = queryMethod.getInlineN1qlQuery();
+			} else if (namedQueries.hasQuery(namedQueryName)) {
+				queryString = namedQueries.getQuery(namedQueryName);
+			} else {
+				throw new RuntimeException("query has n1ql annotation but no inline Query or named Query not found");
+			}
+			query = new StringN1qlQueryCreator(queryString, accessor, queryMethod, operations.getConverter(),
+					operations.getBucketName(), QueryMethodEvaluationContextProvider.DEFAULT).createQuery();
+			q = (ExecutableFindByQueryOperation.ExecutableFindByQuery) operations.findByQuery(domainClass).matching(
+					query);
+		} else {
+			final PartTree tree = new PartTree(queryMethod.getName(), domainClass);
+			query = new N1qlQueryCreator(tree, accessor, queryMethod, operations.getConverter()).createQuery();
+			q = (ExecutableFindByQueryOperation.ExecutableFindByQuery)operations.findByQuery(domainClass).matching(query);
+		}
+		if(queryMethod.isCollectionQuery()) {
+			return q.all();
+		} else {
+			return q.oneValue();
+		}
 
-		List<?> all = operations.findByQuery(domainClass).matching(query).all();
-		return all;
 	}
+
+
 }

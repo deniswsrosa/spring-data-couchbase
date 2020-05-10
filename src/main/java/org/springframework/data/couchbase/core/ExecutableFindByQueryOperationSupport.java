@@ -50,7 +50,7 @@ public class ExecutableFindByQueryOperationSupport implements ExecutableFindByQu
 			this.template = template;
 			this.domainType = domainType;
 			this.query = query;
-			this.reactiveSupport = new ReactiveFindByQueryOperationSupport.ReactiveFindByQuerySupport<>(template.reactive(),
+			this.reactiveSupport = new ReactiveFindByQueryOperationSupport.ReactiveFindByQuerySupport<T>(template.reactive(),
 					domainType, query, scanConsistency);
 			this.scanConsistency = scanConsistency;
 		}
@@ -73,6 +73,11 @@ public class ExecutableFindByQueryOperationSupport implements ExecutableFindByQu
 		@Override
 		public TerminatingFindByQuery<T> matching(final Query query) {
 			return new ExecutableFindByQuerySupport<>(template, domainType, query, scanConsistency);
+		}
+
+		@Override
+		public TerminatingFindByQuery<T> raw(String queryString) {
+			return null; // new ReactiveFindByQuerySupport<>(template, domainType, query, scanConsistency);
 		}
 
 		@Override

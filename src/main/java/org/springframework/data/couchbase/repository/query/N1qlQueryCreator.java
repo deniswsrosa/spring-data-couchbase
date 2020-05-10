@@ -17,29 +17,45 @@ package org.springframework.data.couchbase.repository.query;
 
 import static org.springframework.data.couchbase.core.query.QueryCriteria.*;
 
+import java.lang.reflect.Array;
 import java.util.Iterator;
 
+import com.couchbase.client.core.error.InvalidArgumentException;
+import com.couchbase.client.java.json.JsonArray;
+import com.couchbase.client.java.json.JsonValue;
+import org.springframework.data.couchbase.core.convert.CouchbaseConverter;
 import org.springframework.data.couchbase.core.mapping.CouchbasePersistentProperty;
 import org.springframework.data.couchbase.core.query.Query;
 import org.springframework.data.couchbase.core.query.QueryCriteria;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mapping.PersistentPropertyPath;
 import org.springframework.data.mapping.context.MappingContext;
+import org.springframework.data.repository.query.Parameter;
 import org.springframework.data.repository.query.ParameterAccessor;
+import org.springframework.data.repository.query.QueryMethod;
 import org.springframework.data.repository.query.parser.AbstractQueryCreator;
 import org.springframework.data.repository.query.parser.Part;
 import org.springframework.data.repository.query.parser.PartTree;
 
+/**
+ * @author Michael Nitschinger
+ * @author Michael Reiche
+ */
 public class N1qlQueryCreator extends AbstractQueryCreator<Query, QueryCriteria> {
 
 	private final ParameterAccessor accessor;
 	private final MappingContext<?, CouchbasePersistentProperty> context;
+	private final QueryMethod queryMethod;
+	private final CouchbaseConverter converter;
 
 	public N1qlQueryCreator(final PartTree tree, final ParameterAccessor accessor,
-			final MappingContext<?, CouchbasePersistentProperty> context) {
+			QueryMethod queryMethod,
+			CouchbaseConverter converter) {
 		super(tree, accessor);
 		this.accessor = accessor;
-		this.context = context;
+		this.context = converter.getMappingContext();
+		this.queryMethod = queryMethod;
+		this.converter = converter;
 	}
 
 	@Override
@@ -68,7 +84,8 @@ public class N1qlQueryCreator extends AbstractQueryCreator<Query, QueryCriteria>
 
 	@Override
 	protected Query complete(QueryCriteria criteria, Sort sort) {
-		return (criteria == null ? new Query() : new Query().addCriteria(criteria)).with(sort);
+		JsonArray params = (JsonArray)getPositionalPlaceholderValues(accessor);
+		return (criteria == null ? new Query() : new Query().addCriteria(criteria)).with(sort).setParameters(params);
 	}
 
 	private QueryCriteria from(final Part part, final CouchbasePersistentProperty property, final QueryCriteria criteria,
@@ -77,7 +94,6 @@ public class N1qlQueryCreator extends AbstractQueryCreator<Query, QueryCriteria>
 		final Part.Type type = part.getType();
 		/*
 		    NEAR(new String[]{"IsNear", "Near"}),
-		    WITHIN(new String[]{"IsWithin", "Within"}),
 		 */
 		switch (type) {
 			case GREATER_THAN:
@@ -135,4 +151,24 @@ public class N1qlQueryCreator extends AbstractQueryCreator<Query, QueryCriteria>
 		}
 	}
 
+	// from StringN1qlQueryParser
+	private JsonValue getPositionalPlaceholderValues(ParameterAccessor accessor) {
+		JsonArray posValues = JsonArray.create();
+		if(queryMethod == null)
+			return posValues;
+		for (Parameter parameter : this.queryMethod.getParameters().getBindableParameters()) {
+			try {
+				posValues.add(converter.convertForWriteIfNeeded(accessor.getBindableValue(parameter.getIndex())));
+			}catch(InvalidArgumentException iae){
+				Object o = accessor.getBindableValue(parameter.getIndex());
+				if(o instanceof Object[]) {
+					Object[] array=(Object[])o;
+					for(Object e:array) {
+						posValues.add(converter.convertForWriteIfNeeded(e));
+					}
+				}
+			}
+		}
+		return posValues;
+	}
 }

@@ -15,6 +15,11 @@
  */
 package org.springframework.data.couchbase.core;
 
+import com.couchbase.client.java.json.JsonArray;
+import com.couchbase.client.java.json.JsonObject;
+import com.couchbase.client.java.json.JsonValue;
+import org.springframework.data.couchbase.core.support.TemplateUtils;
+import org.springframework.data.couchbase.repository.query.StringBasedN1qlQueryParser;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -25,6 +30,10 @@ import com.couchbase.client.java.query.QueryOptions;
 import com.couchbase.client.java.query.QueryScanConsistency;
 import com.couchbase.client.java.query.ReactiveQueryResult;
 
+/**
+ * @author Michael Nitschinger
+ * @author Michael Reiche
+ */
 public class ReactiveFindByQueryOperationSupport implements ReactiveFindByQueryOperation {
 
 	private static final Query ALL_QUERY = new Query();
@@ -61,6 +70,11 @@ public class ReactiveFindByQueryOperationSupport implements ReactiveFindByQueryO
 		}
 
 		@Override
+		public TerminatingFindByQuery<T> raw(String queryString) {
+			return null; // new ReactiveFindByQuerySupport<>(template, domainType, query, scanConsistency);
+		}
+
+		@Override
 		public FindByQueryWithQuery<T> consistentWith(QueryScanConsistency scanConsistency) {
 			return new ReactiveFindByQuerySupport<>(template, domainType, query, scanConsistency);
 		}
@@ -87,10 +101,10 @@ public class ReactiveFindByQueryOperationSupport implements ReactiveFindByQueryO
 								return throwable;
 							}
 						}).flatMapMany(ReactiveQueryResult::rowsAsObject).map(row -> {
-							String id = row.getString("__id");
-							long cas = row.getLong("__cas");
-							row.removeKey("__id");
-							row.removeKey("__cas");
+							String id = row.getString(TemplateUtils.SELECT_ID);
+							long cas = row.getLong(TemplateUtils.SELECT_CAS);
+							row.removeKey(TemplateUtils.SELECT_ID);
+							row.removeKey(TemplateUtils.SELECT_CAS);
 							return template.support().decodeEntity(id, row.toString(), cas, domainType);
 						});
 			});
@@ -107,7 +121,7 @@ public class ReactiveFindByQueryOperationSupport implements ReactiveFindByQueryO
 							} else {
 								return throwable;
 							}
-						}).flatMapMany(ReactiveQueryResult::rowsAsObject).map(row -> row.getLong("__count")).next();
+						}).flatMapMany(ReactiveQueryResult::rowsAsObject).map(row -> row.getLong(TemplateUtils.SELECT_COUNT)).next();
 			});
 		}
 
@@ -117,33 +131,58 @@ public class ReactiveFindByQueryOperationSupport implements ReactiveFindByQueryO
 		}
 
 		private String assembleEntityQuery(final boolean count) {
-			final String bucket = "`" + template.getBucketName() + "`";
-
-			final StringBuilder statement = new StringBuilder("SELECT ");
-			if (count) {
-				statement.append("count(*) as __count");
-			} else {
-				statement.append("meta().id as __id, meta().cas as __cas, ").append(bucket).append(".*");
-			}
-
-			statement.append(" FROM ").append(bucket);
 
 			String typeKey = template.getConverter().getTypeKey();
 			String typeValue = template.support().getJavaNameForEntity(domainType);
-			query.addCriteria(QueryCriteria.where(typeKey).is(typeValue));
 
-			query.appendWhere(statement);
+			final StringBuilder statement = new StringBuilder();
+			StringBasedN1qlQueryParser.N1qlSpelValues n1ql =
+					StringBasedN1qlQueryParser.createN1qlSpelValues( template.getBucketName(), typeKey, typeValue, count );
+
+			if(query.hasInlineN1qlQuery()) {
+				query.appendInlineN1qlStatement(statement); // apply the string statement
+			} else {
+				query.appendString(statement,n1ql.selectEntity);
+			}
+			query.appendWhereString(statement,n1ql.filter); // typeKey = typeValue
+
+			// To use generated parameters for literals
+			// we need to figure out if we must use positional or named parameters
+			// If we are using positional parameters, we need to start where
+			// the inlineN1ql left off.
+			int[] paramIndexPtr=null;
+			JsonValue params=query.getParameters();
+			if(params instanceof JsonArray) { // positional parameters
+				if(query.hasInlineN1qlQuery()) {// could be some params in n1ql query string
+					paramIndexPtr = new int[] { ((JsonArray) params).size() };
+				} else {
+					paramIndexPtr = new int[] { 0 };
+				}
+			} else { // named parameters or no parameters, no index required
+				paramIndexPtr = new int[]{-1};
+			}
+			if(!query.hasInlineN1qlQuery()) // dont' use parameterization for non-inlineN1ql
+				paramIndexPtr = null;
+
+			query.appendWhere(statement, paramIndexPtr);
 			query.appendSort(statement);
 			query.appendSkipAndLimit(statement);
-
 			return statement.toString();
 		}
 
 		private QueryOptions buildQueryOptions() {
 			final QueryOptions options = QueryOptions.queryOptions();
+			if(query.getParameters() != null) {
+				if (query.getParameters() instanceof JsonArray) {
+					options.parameters((JsonArray) query.getParameters());
+				} else {
+					options.parameters((JsonObject) query.getParameters());
+				}
+			}
 			if (scanConsistency != null) {
 				options.scanConsistency(scanConsistency);
 			}
+
 			return options;
 		}
 	}

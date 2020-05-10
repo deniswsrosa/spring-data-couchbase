@@ -42,6 +42,7 @@ public class Person extends AbstractEntity {
 
 	public Person() {}
 
+
 	public Person(String firstname, String lastname) {
 		this();
 		setFirstname(firstname);
@@ -104,4 +105,14 @@ public class Person extends AbstractEntity {
 		sb.append("}");
 		return sb.toString();
 	}
+
+	static String optional(String name, String obj) {
+		if (obj != null)
+			if (obj != null /*.isPresent() */)
+				return ("  " + name + ": '" + obj/*.get()*/ + "'\n");
+			else
+				return "  " + name + ": null\n";
+		return "";
+	}
+
 }

@@ -91,6 +91,15 @@ public interface ReactiveFindByQueryOperation {
 		 */
 		TerminatingFindByQuery<T> matching(Query query);
 
+		/**
+		 * Set the filter for the query to be used.
+		 *
+		 * @param queryString must not be {@literal null}.
+		 * @return TerminatingQuery to invoke the actual execution
+		 * @throws IllegalArgumentException if query is {@literal null}.
+		 */
+		TerminatingFindByQuery<T> raw(String queryString);
+
 	}
 
 	interface FindByQueryConsistentWith<T> extends FindByQueryWithQuery<T> {

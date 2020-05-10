@@ -17,19 +17,32 @@ package org.springframework.data.couchbase.core.query;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import com.couchbase.client.java.json.JsonValue;
+import org.springframework.data.couchbase.repository.query.StringBasedN1qlQueryParser;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.util.Assert;
 
+/**
+ * @author Michael Nitschinger
+ * @author Michael Reiche
+ */
 public class Query {
 
 	private final List<QueryCriteria> criteria = new ArrayList<>();
+	private JsonValue parameters = JsonValue.ja();
+	private String inlineN1qlQuery = null;
 	private long skip;
 	private int limit;
 	private Sort sort = Sort.unsorted();
 
-	public Query() {}
+	private final Pattern WHERE_PATTERN = Pattern.compile("\\sWHERE\\s");
+
+	public Query() {
+	}
 
 	public Query(final QueryCriteria criteriaDefinition) {
 		addCriteria(criteriaDefinition);
@@ -37,6 +50,20 @@ public class Query {
 
 	public Query addCriteria(QueryCriteria criteriaDefinition) {
 		this.criteria.add(criteriaDefinition);
+		return this;
+	}
+
+	public Query setParameters(JsonValue parameters) {
+		this.parameters = parameters;
+		return this;
+	}
+
+	public JsonValue getParameters() {
+		return parameters;
+	}
+
+	public Query clearCriteria() { // if annotated with string query, ignore all criteria
+		this.criteria.clear();
 		return this;
 	}
 
@@ -93,6 +120,28 @@ public class Query {
 		return this;
 	}
 
+	/**
+	 * inlineN1qlQuery (Query Annotation)
+	 */
+	public Query setInlineN1qlQuery(String inlineN1qlQuery) {
+		this.inlineN1qlQuery = inlineN1qlQuery;
+		return this;
+	}
+
+	/**
+	 * inlineN1qlQuery (Query Annotation)
+	 */
+	public String getInlineN1qlQuery() {
+		return inlineN1qlQuery;
+	}
+
+	/**
+	 * inlineN1qlQuery (Query Annotation)
+	 */
+	public boolean hasInlineN1qlQuery() {
+		return inlineN1qlQuery != null;
+	}
+
 	public void appendSkipAndLimit(final StringBuilder sb) {
 		if (limit > 0) {
 			sb.append(" LIMIT ").append(limit);
@@ -110,30 +159,91 @@ public class Query {
 		sb.append(" ORDER BY ");
 		sort.stream().forEach(order -> {
 			if (order.isIgnoreCase()) {
-				throw new IllegalArgumentException(String.format("Given sort contained an Order for %s with ignore case! "
-						+ "Couchbase N1QL does not support sorting ignoring case currently!", order.getProperty()));
+				throw new IllegalArgumentException(String.format(
+						"Given sort contained an Order for %s with ignore case! "
+								+ "Couchbase N1QL does not support sorting ignoring case currently!",
+						order.getProperty()));
 			}
 			sb.append(order.getProperty()).append(" ").append(order.isAscending() ? "ASC," : "DESC,");
 		});
 		sb.deleteCharAt(sb.length() - 1);
 	}
 
-	public void appendWhere(final StringBuilder sb) {
-		sb.append(" WHERE ");
-		boolean first = true;
-		for (QueryCriteria c : criteria) {
-			if (first) {
-				first = false;
-			} else {
-				sb.append(" AND ");
+	public void appendWhere(final StringBuilder sb, int[] paramIndexPtr) {
+		if (!criteria.isEmpty()) {
+			appendWhereOrAnd(sb);
+			boolean first = true;
+			for (QueryCriteria c : criteria) {
+				if (first) {
+					first = false;
+				} else {
+					sb.append(" AND ");
+				}
+				sb.append(c.export(paramIndexPtr));
 			}
-			sb.append(c.export());
 		}
+	}
+
+	public void appendCriteria(StringBuilder sb, QueryCriteria criteria){
+		appendWhereOrAnd(sb);
+		sb.append(criteria.export());
+	}
+
+	public void appendWhereString(StringBuilder sb, String whereString){
+		appendWhereOrAnd(sb);
+		sb.append(whereString);
+	}
+	public void appendString(StringBuilder sb, String whereString){
+		sb.append(whereString);
+	}
+
+	private void appendWhereOrAnd(StringBuilder sb) {
+		String querySoFar = sb.toString().toUpperCase();
+		Matcher whereMatcher = WHERE_PATTERN.matcher(querySoFar);
+		boolean alreadyWhere = false;
+		while (!alreadyWhere && whereMatcher.find()) {
+			if (notQuoted(whereMatcher.start(), whereMatcher.end(), querySoFar)) {
+				alreadyWhere = true;
+			}
+		}
+		if (alreadyWhere) {
+			sb.append(" AND ");
+		} else {
+			sb.append(" WHERE ");
+		}
+	}
+	/**
+	 * ensure that the WHERE we found was not quoted
+	 * @param start
+	 * @param end
+	 * @param querySoFar
+	 * @return true -> not quoted, false -> quoted
+	 */
+	private static boolean notQuoted(int start, int end, String querySoFar) {
+		Matcher quoteMatcher = StringBasedN1qlQueryParser.QUOTE_DETECTION_PATTERN.matcher(querySoFar);
+		List<int[]> quotes = new ArrayList<int[]>();
+		while (quoteMatcher.find()) {
+			quotes.add(new int[] { quoteMatcher.start(), quoteMatcher.end() });
+		}
+
+		for (int[] quote : quotes) {
+			if (quote[0] <= start && quote[1] >= end) {
+				return false; // it is quoted
+			}
+		}
+		return true; // is not quoted
+	}
+
+	/**
+	 * inlineN1qlQuery (Query Annotation)
+	 */
+	public void appendInlineN1qlStatement(final StringBuilder sb) {
+		sb.append(getInlineN1qlQuery());
 	}
 
 	public String export() {
 		StringBuilder sb = new StringBuilder();
-		appendWhere(sb);
+		appendWhere(sb,null);
 		appendSort(sb);
 		appendSkipAndLimit(sb);
 		return sb.toString();
